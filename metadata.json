@@ -1,0 +1,6 @@
+{
+  "name": "AI Top 30 Exploded Benchmark Chart",
+  "description": "Interaktives Balkendiagramm der Top-Chatbots für Wissenschaft und Analyse mit technischer Explosionszeichnung, dynamischer Dekomposition der Benchmark-Kriterien und Live-Aktualisierung.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
