@@ -1,25 +1,36 @@
-import React, { useState, useRef } from 'react';
-import { ModelRecord } from '../types';
+import React, { useState } from 'react';
+import { ModelRecord, BenchmarkComponent } from '../types';
+import { BENCHMARK_COMPONENTS } from '../data/benchmarks';
 import { Language, TRANSLATIONS } from '../utils/i18n';
+import { ExternalLink } from 'lucide-react';
 
 interface ExplodedBarChartProps {
   models: ModelRecord[];
   activeBenchmarkId: string | null;
-  explodedViewEnabled: boolean;
+  explodedViewEnabled?: boolean;
   fullExplosionEnabled: boolean;
   searchFilter: string;
-  selectedCompany: string | null;
+  selectedFamilies?: string[];
+  selectedCompany?: string | null;
   lang: Language;
   onExplosionStateChange?: (isExplodedActive: boolean) => void;
+}
+
+interface HoveredSegmentInfo {
+  comp: BenchmarkComponent;
+  model: ModelRecord;
+  points: number;
+  raw: number;
 }
 
 export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
   models,
   activeBenchmarkId,
-  explodedViewEnabled,
+  explodedViewEnabled = true,
   fullExplosionEnabled,
   searchFilter,
-  selectedCompany,
+  selectedFamilies = [],
+  selectedCompany = null,
   lang,
   onExplosionStateChange,
 }) => {
@@ -27,15 +38,15 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
 
   // Index of hovered bar
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [hoveredSegment, setHoveredSegment] = useState<HoveredSegmentInfo | null>(null);
 
   // Y-axis scale: Maximum score in dataset is 69, max Y = 75
   const maxAxisScore = 75;
-  const chartHeight = 475;
-  const topPadding = 70; // generous headroom so larger favicons have plenty of room
-  const bottomPadding = 165; // generous space below baseline for rotated model names with badges without clipping
-  const availablePlotHeight = chartHeight - topPadding - bottomPadding; // 240px
-  const baselineY = chartHeight - bottomPadding; // 310px
+  const chartHeight = 500;
+  const topPadding = 65; // Streamlined headroom now that the popup is integrated into the header bar
+  const bottomPadding = 165; // Generous space below baseline for rotated model names with badges without clipping
+  const availablePlotHeight = chartHeight - topPadding - bottomPadding; // 270px
+  const baselineY = chartHeight - bottomPadding; // 335px
 
   const barWidth = 26;
   const barGap = 12;
@@ -49,7 +60,7 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
     return (Math.max(0, val) / maxAxisScore) * availablePlotHeight;
   };
 
-  // Determine if a model matches the search/family filter
+  // Determine if a model matches the search/family filters (multi-select supported)
   const isModelHighlighted = (model: ModelRecord): boolean => {
     const q = searchFilter.trim().toLowerCase();
     const matchesSearch =
@@ -59,15 +70,28 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
       model.companyName.toLowerCase().includes(q) ||
       model.creatorClean.toLowerCase().includes(q);
 
+    const matchesFamilies =
+      selectedFamilies.length === 0 ||
+      selectedFamilies.some((fam) => {
+        const famLow = fam.toLowerCase();
+        return (
+          model.displayName.toLowerCase().includes(famLow) ||
+          model.name.toLowerCase().includes(famLow) ||
+          model.companyName.toLowerCase().includes(famLow) ||
+          model.creatorClean.toLowerCase().includes(famLow)
+        );
+      });
+
     const matchesCompany =
       !selectedCompany ||
       model.companyName.toLowerCase() === selectedCompany.toLowerCase() ||
       model.creatorClean.toLowerCase().includes(selectedCompany.toLowerCase());
 
-    return matchesSearch && matchesCompany;
+    return matchesSearch && matchesFamilies && matchesCompany;
   };
 
-  const hasActiveHighlight = searchFilter.trim().length > 0 || selectedCompany !== null;
+  const hasActiveHighlight =
+    searchFilter.trim().length > 0 || selectedFamilies.length > 0 || selectedCompany !== null;
 
   // Is a bar exploded?
   const isExploded = (index: number) => {
@@ -77,14 +101,16 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
   };
 
   const handleMouseEnter = (index: number) => {
-    if (explodedViewEnabled || fullExplosionEnabled) {
+    if (hoveredIndex !== index) {
       setHoveredIndex(index);
-      if (onExplosionStateChange) onExplosionStateChange(true);
+      setHoveredSegment(null);
     }
+    if (onExplosionStateChange) onExplosionStateChange(true);
   };
 
   const handleMouseLeave = () => {
     setHoveredIndex(null);
+    setHoveredSegment(null);
     if (onExplosionStateChange) {
       onExplosionStateChange(fullExplosionEnabled);
     }
@@ -151,62 +177,167 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 shadow-xs transition-colors">
-      {/* Non-intrusive Quiet Info Bar above chart */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 min-h-[38px] pb-3 mb-2 border-b border-slate-100 dark:border-slate-800 text-xs">
+      {/* Non-intrusive Info Bar above chart: dynamically displays model & hovered segment information */}
+      <div className="flex flex-col justify-between gap-1.5 min-h-[64px] pb-2.5 mb-2 border-b border-slate-100 dark:border-slate-800 text-xs">
         {hoveredModel ? (
-          <div className="flex flex-wrap items-center gap-2 text-slate-700 dark:text-slate-300">
-            <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-              <span className="w-4.5 h-4.5 rounded-full overflow-hidden flex items-center justify-center bg-white border border-slate-200 dark:border-slate-700 shadow-2xs shrink-0">
-                <img
-                  src={hoveredModel.faviconUrl}
-                  alt=""
-                  className={`w-full h-full object-contain ${
-                    isZoomedCompany(hoveredModel) ? 'scale-145' : 'scale-110'
-                  }`}
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
-                />
+          <div className="flex flex-col gap-1 w-full">
+            {/* Row 1: Model Identification + Hovered Segment or Summary Score */}
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-slate-700 dark:text-slate-300 min-h-[24px]">
+              {/* Model Name & Favicon (Clickable link if modelUrl is available) */}
+              {hoveredModel.modelUrl ? (
+                <a
+                  href={hoveredModel.modelUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold text-slate-900 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1.5 transition-colors group cursor-pointer"
+                  title={`${hoveredModel.displayName} Chatbot / App öffnen`}
+                >
+                  <span className="w-5 h-5 rounded-full overflow-hidden flex items-center justify-center bg-white border border-slate-200 dark:border-slate-700 shadow-2xs shrink-0 group-hover:scale-105 transition-transform">
+                    <img
+                      src={hoveredModel.faviconUrl}
+                      alt=""
+                      className={`w-full h-full object-contain ${
+                        isZoomedCompany(hoveredModel) ? 'scale-145' : 'scale-110'
+                      }`}
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  </span>
+                  <span className="underline decoration-slate-300 dark:decoration-slate-600 underline-offset-2 group-hover:decoration-blue-500">
+                    {hoveredModel.displayName}
+                  </span>
+                  <ExternalLink className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                </a>
+              ) : (
+                <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full overflow-hidden flex items-center justify-center bg-white border border-slate-200 dark:border-slate-700 shadow-2xs shrink-0">
+                    <img
+                      src={hoveredModel.faviconUrl}
+                      alt=""
+                      className={`w-full h-full object-contain ${
+                        isZoomedCompany(hoveredModel) ? 'scale-145' : 'scale-110'
+                      }`}
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  </span>
+                  {hoveredModel.displayName}
+                </span>
+              )}
+
+              <span className="text-slate-400">·</span>
+              <span className="font-mono text-slate-600 dark:text-slate-400">
+                {t.company} <strong>{hoveredModel.companyName}</strong>
               </span>
-              {hoveredModel.displayName}
-            </span>
-            <span className="text-slate-400">·</span>
-            <span className="font-mono">
-              {t.company} <strong>{hoveredModel.companyName}</strong>
-            </span>
-            <span className="text-slate-400">·</span>
-            <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-              {t.score}: {hoveredModel.scoreNewReported ?? hoveredModel.scoreNewCalculated} {t.points} ({t.rank} #{hoveredModel.rank})
-            </span>
-            <span className="text-slate-400">·</span>
-            <span className="font-mono text-emerald-600 dark:text-emerald-400">
-              {lang === 'de' ? 'Faktentreue' : 'Non-Hallucination'}: {hoveredModel.rawScores.nonHallucination}% (+{(hoveredModel.rawScores.nonHallucination / 8).toFixed(1)} {t.points})
-            </span>
-          </div>
-        ) : hasActiveHighlight ? (
-          <div className="text-emerald-600 dark:text-emerald-400 text-xs font-mono">
-            {t.highlightActive} {models.filter(isModelHighlighted).length} {t.ofModelsMatch}
+
+              {/* Specific segment info if hovered, else summary score */}
+              {hoveredSegment ? (
+                <>
+                  <span className="text-slate-400">·</span>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span
+                      className="w-3 h-3 rounded-xs shrink-0 shadow-2xs border border-black/10 dark:border-white/10"
+                      style={{ backgroundColor: hoveredSegment.comp.color }}
+                    />
+                    <span style={{ color: hoveredSegment.comp.color }}>
+                      {lang === 'en' ? hoveredSegment.comp.nameEn : hoveredSegment.comp.nameDe}
+                    </span>
+                    <span className="font-mono text-slate-900 dark:text-white font-bold">
+                      {Math.round(hoveredSegment.raw)}%
+                    </span>
+                    <span className="font-mono text-slate-500 dark:text-slate-400 font-normal">
+                      (+{hoveredSegment.points.toFixed(1)} {t.points})
+                    </span>
+                  </div>
+
+                  <span className="text-slate-400">·</span>
+                  {hoveredSegment.comp.sourceUrl ? (
+                    <a
+                      href={hoveredSegment.comp.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-mono text-[11px] font-semibold transition-colors cursor-pointer"
+                      title={`${hoveredSegment.comp.sourceName} Website öffnen (${hoveredSegment.comp.sourceUrl})`}
+                    >
+                      <span>{hoveredSegment.comp.sourceName}</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  ) : (
+                    <span className="font-mono text-[11px] text-slate-400">
+                      {hoveredSegment.comp.sourceName}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-400">·</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                    {t.score}: {hoveredModel.scoreNewReported ?? hoveredModel.scoreNewCalculated} {t.points} ({t.rank} #{hoveredModel.rank})
+                  </span>
+                  <span className="text-slate-400">·</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                    {lang === 'de' ? 'Faktentreue' : 'Non-Hallucination'}: {hoveredModel.rawScores.nonHallucination}% (+{(hoveredModel.rawScores.nonHallucination / 8).toFixed(1)} {t.points})
+                  </span>
+                </>
+              )}
+            </div>
+
+            {/* Row 2: Always present to guarantee rock-solid zero-shift height */}
+            <div className="text-[11.5px] rounded px-2.5 py-1 border flex items-center gap-1.5 leading-relaxed min-h-[30px] transition-colors bg-slate-50 dark:bg-slate-800/60 border-slate-200/60 dark:border-slate-700/60">
+              {hoveredSegment ? (
+                <>
+                  <span className="font-semibold text-slate-700 dark:text-slate-200 shrink-0">
+                    {lang === 'de' ? 'Kriterien-Beschreibung:' : 'Criterion:'}
+                  </span>
+                  <span className="text-slate-600 dark:text-slate-300">
+                    {lang === 'en' ? hoveredSegment.comp.descriptionEn : hoveredSegment.comp.descriptionDe}
+                  </span>
+                </>
+              ) : (
+                <span className="text-slate-500 dark:text-slate-400">
+                  {lang === 'de'
+                    ? 'Bewege den Mauszeiger über die einzelnen Segmente des Balkens, um Kriterien-Details und Quellen anzuzeigen.'
+                    : 'Hover over individual bar segments to view benchmark criteria & source links.'}
+                </span>
+              )}
+            </div>
           </div>
         ) : (
-          <div className="text-slate-500 dark:text-slate-400 text-xs font-mono">
-            {fullExplosionEnabled
-              ? t.fullExplosionHelp
-              : explodedViewEnabled
-              ? t.hoverHelp
-              : t.disabledHelp}
+          <div className="flex flex-col gap-1 w-full">
+            {/* Idle Row 1 */}
+            <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300 min-h-[24px]">
+              <span className="font-bold text-slate-900 dark:text-white">AI-Top30 Ranking</span>
+              <span className="text-slate-400">·</span>
+              <span className="font-mono text-slate-600 dark:text-slate-400">
+                {models.length} {t.modelsCount}
+              </span>
+              {hasActiveHighlight && (
+                <>
+                  <span className="text-slate-400">·</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-mono">
+                    {t.highlightActive} {models.filter(isModelHighlighted).length} {t.ofModelsMatch}
+                  </span>
+                </>
+              )}
+            </div>
+            {/* Idle Row 2 */}
+            <div className="text-[11.5px] text-slate-500 dark:text-slate-400 rounded px-2.5 py-1 border border-dashed border-slate-200/60 dark:border-slate-700/60 bg-slate-50/50 dark:bg-slate-800/30 flex items-center gap-1.5 leading-relaxed min-h-[30px]">
+              <span>
+                {fullExplosionEnabled
+                  ? t.fullExplosionHelp
+                  : explodedViewEnabled
+                  ? t.hoverHelp
+                  : t.disabledHelp}
+              </span>
+            </div>
           </div>
         )}
-
-        <div className="text-[11px] text-slate-400 font-mono shrink-0">
-          {t.top30Subtitle}
-        </div>
       </div>
 
       {/* SVG Chart Container */}
-      <div
-        ref={containerRef}
-        className="relative select-none w-full"
-      >
+      <div className="relative select-none w-full">
         <svg
           viewBox={`0 0 ${chartWidth} ${chartHeight}`}
           className="block w-full h-auto"
@@ -380,32 +511,66 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
                   const fillColor = exploded ? seg.comp.color : countryFill;
                   const opacity = isOtherFocused && exploded ? 0.35 : 1;
                   const isTop = sIdx === segments.length - 1;
+                  const benchMeta = BENCHMARK_COMPONENTS.find((b) => b.id === seg.comp.id);
 
                   return (
-                    <rect
-                      key={seg.comp.id}
-                      x={barX}
-                      y={seg.segY}
-                      width={barWidth}
-                      height={Math.max(1, seg.segHeight)}
-                      rx={exploded ? 1.5 : isTop ? 2 : 0}
-                      ry={exploded ? 1.5 : isTop ? 2 : 0}
-                      fill={fillColor}
-                      opacity={opacity}
-                      stroke={
-                        exploded
-                          ? 'rgba(255,255,255,0.25)'
-                          : model.flag.includes('🇨🇳')
-                          ? '#991B1B'
-                          : model.flag.includes('🇫🇷')
-                          ? '#002654'
-                          : '#1E3A8A'
-                      }
-                      strokeWidth={exploded ? 0.5 : 0.75}
-                      style={{
-                        transition: 'y 0.25s ease-out, fill 0.25s ease-out, opacity 0.2s',
-                      }}
-                    />
+                    <g key={seg.comp.id}>
+                      <rect
+                        x={barX}
+                        y={seg.segY}
+                        width={barWidth}
+                        height={Math.max(1, seg.segHeight)}
+                        rx={exploded ? 1.5 : isTop ? 2 : 0}
+                        ry={exploded ? 1.5 : isTop ? 2 : 0}
+                        fill={fillColor}
+                        opacity={opacity}
+                        stroke={
+                          exploded
+                            ? 'rgba(255,255,255,0.3)'
+                            : model.flag.includes('🇨🇳')
+                            ? '#991B1B'
+                            : model.flag.includes('🇫🇷')
+                            ? '#002654'
+                            : '#1E3A8A'
+                        }
+                        strokeWidth={exploded ? 0.5 : 0.75}
+                        style={{
+                          transition: 'y 0.25s ease-out, fill 0.25s ease-out, opacity 0.2s',
+                        }}
+                        onMouseEnter={() => {
+                          if (exploded && benchMeta) {
+                            setHoveredSegment({
+                              comp: benchMeta,
+                              model,
+                              points: seg.comp.pointsContribution,
+                              raw: seg.comp.rawValue,
+                            });
+                          }
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredSegment(null);
+                        }}
+                      />
+
+                      {/* Originale Prozentzahl mittig im jeweiligen Balkenteil bei Explosion (auch Nachbarbalken & volle Explosion) */}
+                      {exploded && seg.segHeight >= 6 && (
+                        <text
+                          x={barCenterX}
+                          y={seg.segY + seg.segHeight / 2 + 3}
+                          textAnchor="middle"
+                          fill="#FFFFFF"
+                          fontSize={seg.segHeight < 11 ? '8' : '8.5'}
+                          fontFamily="monospace"
+                          fontWeight="bold"
+                          pointerEvents="none"
+                          style={{
+                            textShadow: '0 1px 2px rgba(0,0,0,0.85), 0 0 1px rgba(0,0,0,0.95)',
+                          }}
+                        >
+                          {`${Math.round(seg.comp.rawValue)}%`}
+                        </text>
+                      )}
+                    </g>
                   );
                 })}
 
@@ -535,20 +700,61 @@ export const ExplodedBarChart: React.FC<ExplodedBarChartProps> = ({
                   );
                 })()}
 
-                {/* Rotated Model Name below Baseline: OHNE Flagge, mit 💲, 🌐, 🆕 Symbolik */}
+                {/* Rotated Model Name below Baseline: OHNE Flagge, mit vergrößerten 💲, 🌐 Symbolen & klickbar falls modelUrl vorhanden */}
                 <g transform={`translate(${barCenterX}, ${baselineY + 12})`}>
-                  <text
-                    x="0"
-                    y="0"
-                    textAnchor="end"
-                    transform="rotate(-52)"
-                    fill={isHovered || (hasActiveHighlight && highlighted) ? '#0F172A' : '#475569'}
-                    className="dark:fill-slate-300 transition-colors"
-                    fontSize="10"
-                    fontWeight={isHovered || (hasActiveHighlight && highlighted) ? '700' : '500'}
-                  >
-                    {formatAxisLabel(model)}
-                  </text>
+                  {model.modelUrl ? (
+                    <a
+                      href={model.modelUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cursor-pointer group"
+                    >
+                      <text
+                        x="0"
+                        y="0"
+                        textAnchor="end"
+                        transform="rotate(-52)"
+                        fill={isHovered || (hasActiveHighlight && highlighted) ? '#2563EB' : '#475569'}
+                        className="dark:fill-slate-300 transition-colors hover:fill-blue-600 dark:hover:fill-blue-400 cursor-pointer"
+                        fontSize="10"
+                        fontWeight={isHovered || (hasActiveHighlight && highlighted) ? '700' : '500'}
+                      >
+                        <title>{`${model.displayName} Chatbot / App öffnen`}</title>
+                        {model.displayName}
+                        {model.isNew && (
+                          <tspan fill="#F59E0B" fontWeight="bold"> ✦ NEW</tspan>
+                        )}
+                        {model.isPaid && (
+                          <tspan fontSize="15" fontWeight="bold" fill="#059669"> 💲</tspan>
+                        )}
+                        {model.isFreeApi && (
+                          <tspan fontSize="15" fontWeight="bold" fill="#2563EB"> 🌐</tspan>
+                        )}
+                      </text>
+                    </a>
+                  ) : (
+                    <text
+                      x="0"
+                      y="0"
+                      textAnchor="end"
+                      transform="rotate(-52)"
+                      fill={isHovered || (hasActiveHighlight && highlighted) ? '#0F172A' : '#475569'}
+                      className="dark:fill-slate-300 transition-colors"
+                      fontSize="10"
+                      fontWeight={isHovered || (hasActiveHighlight && highlighted) ? '700' : '500'}
+                    >
+                      {model.displayName}
+                      {model.isNew && (
+                        <tspan fill="#F59E0B" fontWeight="bold"> ✦ NEW</tspan>
+                      )}
+                      {model.isPaid && (
+                        <tspan fontSize="15" fontWeight="bold" fill="#059669"> 💲</tspan>
+                      )}
+                      {model.isFreeApi && (
+                        <tspan fontSize="15" fontWeight="bold" fill="#2563EB"> 🌐</tspan>
+                      )}
+                    </text>
+                  )}
                 </g>
               </g>
             );

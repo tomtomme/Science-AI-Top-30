@@ -4,6 +4,7 @@ export interface BenchmarkComponent {
   nameDe: string;
   nameEn: string;
   sourceName: string;
+  sourceUrl?: string;
   color: string;
   darkColor: string;
   lightBg: string;
@@ -67,6 +68,7 @@ export interface ModelRecord {
   storyline: string;
   chatLink?: string;
   apiLink?: string;
+  modelUrl?: string;
   companyDomain: string;
   companyColor: string;
   faviconUrl: string;

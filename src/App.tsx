@@ -5,38 +5,50 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { ModelRecord } from './types';
-import { FALLBACK_CSV_CONTENT, SHEET_HTML_URL, PIVOT_HTML_URL, CHART_HTML_URL, RAW_CSV_URL, GITHUB_REPO_URL } from './data/rawCsvFallback';
+import { FALLBACK_CSV_CONTENT, SHEET_HTML_URL, CHART_HTML_URL, GITHUB_REPO_URL } from './data/rawCsvFallback';
 import { parseModelDataset } from './utils/csvParser';
 import { loadModelsData } from './services/dataService';
 import { ExplodedBarChart } from './components/ExplodedBarChart';
-import { BenchmarkLegend } from './components/BenchmarkLegend';
 import { SearchBar } from './components/SearchBar';
 import { Language, TRANSLATIONS } from './utils/i18n';
-import { RefreshCw, Github, FileSpreadsheet, Globe } from 'lucide-react';
+import { RefreshCw, Github, FileSpreadsheet, BarChart2 } from 'lucide-react';
 
 export default function App() {
   // Language state (de | en)
   const [lang, setLang] = useState<Language>('de');
   const t = TRANSLATIONS[lang];
 
-  // Pre-load top 30 models from embedded fallback for instant zero-latency render
+  // Pre-load all models from embedded fallback for instant zero-latency render
   const initialModels = useMemo(() => parseModelDataset(FALLBACK_CSV_CONTENT), []);
   const [models, setModels] = useState<ModelRecord[]>(initialModels);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
   
-  // Toggle 1: Enable/disable exploded view interaction
-  const [explodedViewEnabled, setExplodedViewEnabled] = useState<boolean>(true);
-  
-  // Toggle 2: "Volle Explosion" -> all bars fully exploded simultaneously
+  // Slider: Anzahl angezeigter Top-Modelle in 5er-Schritten (Standard: 30)
+  const [topCount, setTopCount] = useState<number>(30);
+
+  // Volle Explosion Schalter
   const [fullExplosionEnabled, setFullExplosionEnabled] = useState<boolean>(false);
 
-  // Search/family filter for highlighting models
+  // Filter: Freitext-Suche und Schnellfilter mit Mehrfachauswahl (>1 Kategorie)
   const [searchFilter, setSearchFilter] = useState<string>('');
+  const [selectedFamilies, setSelectedFamilies] = useState<string[]>([]);
   const [selectedCompany] = useState<string | null>(null);
 
-  // Active benchmark filter from legend
-  const [activeBenchmarkId, setActiveBenchmarkId] = useState<string | null>(null);
+  // Angezeigte Modelle basierend auf dem 5er-Schritt Slider
+  const displayedModels = useMemo(() => {
+    return models.slice(0, topCount);
+  }, [models, topCount]);
+
+  const handleToggleFamily = useCallback((family: string) => {
+    setSelectedFamilies((prev) =>
+      prev.includes(family) ? prev.filter((f) => f !== family) : [...prev, family]
+    );
+  }, []);
+
+  const handleClearFamilies = useCallback(() => {
+    setSelectedFamilies([]);
+  }, []);
 
   // Hourly countdown timer (3600 seconds)
   const SYNC_INTERVAL = 3600;
@@ -82,11 +94,13 @@ export default function App() {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // Match count for search filter
+  // Match count for search/family filter
   const highlightedCount = useMemo(() => {
-    if (!searchFilter.trim() && !selectedCompany) return models.length;
     const q = searchFilter.trim().toLowerCase();
-    return models.filter((m) => {
+    const hasFilter = q.length > 0 || selectedFamilies.length > 0 || selectedCompany !== null;
+    if (!hasFilter) return displayedModels.length;
+
+    return displayedModels.filter((m) => {
       const matchesSearch =
         !q ||
         m.displayName.toLowerCase().includes(q) ||
@@ -94,32 +108,44 @@ export default function App() {
         m.companyName.toLowerCase().includes(q) ||
         m.creatorClean.toLowerCase().includes(q);
 
+      const matchesFamilies =
+        selectedFamilies.length === 0 ||
+        selectedFamilies.some((fam) => {
+          const famLow = fam.toLowerCase();
+          return (
+            m.displayName.toLowerCase().includes(famLow) ||
+            m.name.toLowerCase().includes(famLow) ||
+            m.companyName.toLowerCase().includes(famLow) ||
+            m.creatorClean.toLowerCase().includes(famLow)
+          );
+        });
+
       const matchesCompany =
         !selectedCompany ||
         m.companyName.toLowerCase() === selectedCompany.toLowerCase() ||
         m.creatorClean.toLowerCase().includes(selectedCompany.toLowerCase());
 
-      return matchesSearch && matchesCompany;
+      return matchesSearch && matchesFamilies && matchesCompany;
     }).length;
-  }, [models, searchFilter, selectedCompany]);
+  }, [displayedModels, searchFilter, selectedFamilies, selectedCompany]);
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col font-sans antialiased">
       {/* Clean top bar */}
       <header className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xs px-4 sm:px-6 py-2.5">
-        <div className="w-full max-w-[1720px] mx-auto flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-          {/* Title & Subtitle */}
-          <div className="max-w-4xl">
-            <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white tracking-tight leading-snug">
+        <div className="w-full max-w-[1720px] mx-auto flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+          {/* Title & Subtitle: Begrenzt auf maximal 2 Zeilen für optimale Lesbarkeit */}
+          <div className="min-w-0 flex-1">
+            <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white tracking-tight leading-snug line-clamp-2">
               {t.title}
             </h1>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-normal font-sans">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-normal font-sans line-clamp-2">
               {t.subtitle}
             </p>
           </div>
 
-          {/* Controls, language toggle & sync actions */}
-          <div className="flex flex-wrap items-center gap-2.5 text-xs font-mono shrink-0">
+          {/* Controls, language toggle & sync / external link icons */}
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono shrink-0 self-start xl:self-center">
             {/* Language Switcher DE / EN */}
             <div className="flex items-center bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg p-0.5">
               <button
@@ -148,36 +174,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Toggle 1: Explosion ON / OFF */}
-            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg px-2 py-1">
-              <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
-                {t.explosionToggle}
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={explodedViewEnabled}
-                onClick={() => {
-                  setExplodedViewEnabled((prev) => !prev);
-                }}
-                className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
-                  explodedViewEnabled ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                }`}
-                title={explodedViewEnabled ? 'Mouse-Over Explosion deaktivieren' : 'Mouse-Over Explosion aktivieren'}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
-                    explodedViewEnabled ? 'translate-x-3' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
-                {explodedViewEnabled ? t.on : t.off}
-              </span>
-            </div>
-
-            {/* Toggle 2: Volle Explosion ON / OFF */}
+            {/* Toggle: Volle Explosion ON / OFF */}
             <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-lg px-2 py-1">
               <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
                 {t.fullExplosionToggle}
@@ -192,7 +189,7 @@ export default function App() {
                 className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
                   fullExplosionEnabled ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
                 }`}
-                title={fullExplosionEnabled ? 'Volle Explosion deaktivieren' : 'Alle 30 Balken gleichzeitig vollständig explodieren'}
+                title={fullExplosionEnabled ? 'Volle Explosion deaktivieren' : 'Alle Balken gleichzeitig vollständig explodieren'}
               >
                 <span
                   aria-hidden="true"
@@ -206,7 +203,7 @@ export default function App() {
               </span>
             </div>
 
-            <span className="hidden xl:inline text-slate-500 dark:text-slate-400 text-[11px]">
+            <span className="hidden 2xl:inline text-slate-500 dark:text-slate-400 text-[11px]">
               {t.lastSync} {formatTime(lastSyncedAt)}
             </span>
 
@@ -220,11 +217,22 @@ export default function App() {
               <span>{t.sync}</span>
             </button>
 
+            {/* Statisches Diagramm als Icon neben Google Sheets & GitHub */}
+            <a
+              href={CHART_HTML_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
+              title={lang === 'de' ? 'Statisches Diagramm öffnen' : 'Open static chart'}
+            >
+              <BarChart2 className="w-4 h-4" />
+            </a>
+
             <a
               href={SHEET_HTML_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-1 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+              className="p-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
               title="Google Sheet öffnen"
             >
               <FileSpreadsheet className="w-4 h-4" />
@@ -234,7 +242,7 @@ export default function App() {
               href={GITHUB_REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-1 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+              className="p-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
               title="GitHub Repository tomtomme/AI-Top30"
             >
               <Github className="w-4 h-4" />
@@ -243,61 +251,36 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Bar Chart Container with Legend on the Left */}
+      {/* Main Bar Chart Container */}
       <main className="flex-1 w-full max-w-[1720px] mx-auto px-4 sm:px-6 py-3 sm:py-3.5 flex flex-col space-y-2.5">
-        {/* Search Bar oberhalb des Balkendiagramms mit Muse und ChatGPT */}
+        {/* Search Bar mit 5er-Schritt-Slider und alphabetischen Schnellfiltern */}
         <SearchBar
           value={searchFilter}
           onChange={setSearchFilter}
+          selectedFamilies={selectedFamilies}
+          onToggleFamily={handleToggleFamily}
+          onClearFamilies={handleClearFamilies}
+          topCount={topCount}
+          onTopCountChange={setTopCount}
+          maxAvailableModels={models.length}
           matchCount={highlightedCount}
-          totalCount={models.length}
+          totalCount={displayedModels.length}
           lang={lang}
         />
 
-        {/* Layout: Links = Explosionsfarben-Legende, Rechts = Balkendiagramm */}
-        <div className="flex flex-col lg:flex-row items-stretch gap-3">
-          {/* Legende: Unexplodierte Balkenfarben OBEN, Explodierte Farben UNTEN */}
-          <BenchmarkLegend
-            activeBenchmarkId={activeBenchmarkId}
-            onSelectBenchmark={setActiveBenchmarkId}
+        {/* Balkendiagramm: Breit dargestellt, die volle Containerbreite nutzend */}
+        <div className="w-full">
+          <ExplodedBarChart
+            models={displayedModels}
+            activeBenchmarkId={null}
+            fullExplosionEnabled={fullExplosionEnabled}
+            searchFilter={searchFilter}
+            selectedFamilies={selectedFamilies}
+            selectedCompany={selectedCompany}
             lang={lang}
-            className="w-full lg:w-72 xl:w-80 shrink-0"
           />
-
-          {/* Balkendiagramm: Breit dargestellt, responsiv ohne horizontales Scrollen */}
-          <div className="flex-1 min-w-0">
-            <ExplodedBarChart
-              models={models}
-              activeBenchmarkId={activeBenchmarkId}
-              explodedViewEnabled={explodedViewEnabled}
-              fullExplosionEnabled={fullExplosionEnabled}
-              searchFilter={searchFilter}
-              selectedCompany={selectedCompany}
-              lang={lang}
-            />
-          </div>
         </div>
       </main>
-
-      {/* Clean quiet footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800 py-2.5 px-4 text-center text-[11px] text-slate-400 font-mono">
-        <div className="w-full max-w-[1720px] mx-auto flex flex-wrap items-center justify-between gap-2">
-          <span>AI-Top30 · Deployment auf GitHub Pages (tomtomme/AI-Top30)</span>
-          <div className="flex items-center gap-3">
-            <a href={RAW_CSV_URL} target="_blank" rel="noopener noreferrer" className="hover:underline">
-              Freigegebenes CSV
-            </a>
-            <span>·</span>
-            <a href={CHART_HTML_URL} target="_blank" rel="noopener noreferrer" className="hover:underline">
-              Original-Diagramm (Datei 1)
-            </a>
-            <span>·</span>
-            <a href={PIVOT_HTML_URL} target="_blank" rel="noopener noreferrer" className="hover:underline">
-              Pivot (Datei 3)
-            </a>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

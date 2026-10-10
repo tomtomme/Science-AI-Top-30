@@ -86,8 +86,10 @@ function extractFlag(text: string): { flag: string; cleanText: string } {
 }
 
 /**
- * Parses raw CSV into structured model records for the Top 30 table.
- * Specifically extracts only the top 30 models from the top section of the raw sheet.
+ * Parses raw CSV into structured model records for the Top 30 table and expanded timeline.
+ * 1. Parses the curated Top 30 from the top section.
+ * 2. Parses additional models from the full timeline (starting at "Full Timeline:").
+ * Deduplicates by cleaned model name so the Top 30 stay authoritative at ranks 1..30.
  */
 export function parseModelDataset(csvText: string): ModelRecord[] {
   const rows = parseCsvRows(csvText);
@@ -107,28 +109,28 @@ export function parseModelDataset(csvText: string): ModelRecord[] {
     headerRowIndex = 1;
   }
 
-  const models: ModelRecord[] = [];
-
-  // Only parse the top table (stop when hitting empty row or "Sources & Notes" or "Full Timeline")
-  for (let r = headerRowIndex + 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row || row.length < 5) break;
+  const parseRowToModel = (row: string[], rIdx: number): ModelRecord | null => {
+    if (!row || row.length < 5) return null;
 
     const rawNameCell = (row[1] || '').trim();
     const rawCreatorCell = (row[2] || '').trim();
 
-    // Stop condition: empty row or section break
-    if (!rawNameCell && !rawCreatorCell) break;
+    if (!rawNameCell && !rawCreatorCell) return null;
     if (
       rawNameCell.includes('Sources & Notes') ||
       rawNameCell.includes('Full Timeline') ||
       rawNameCell.includes('Expectations') ||
-      rawNameCell.includes('Rumors')
+      rawNameCell.includes('Rumors') ||
+      rawNameCell === 'min' ||
+      rawNameCell === 'mean' ||
+      rawNameCell === 'median' ||
+      rawNameCell === 'max' ||
+      rawNameCell.startsWith('count')
     ) {
-      break;
+      return null;
     }
     if (rawCreatorCell.includes('Sources & Notes') || rawCreatorCell.includes('Company')) {
-      break;
+      return null;
     }
 
     // Extract Flag and Name
@@ -147,7 +149,7 @@ export function parseModelDataset(csvText: string): ModelRecord[] {
       .replace(/🆕/g, '')
       .trim();
 
-    if (!displayName || displayName.length < 2) continue;
+    if (!displayName || displayName.length < 2) return null;
 
     // Parse Benchmark Columns (D through K):
     const valD = parseNum(row[3]);
@@ -180,8 +182,11 @@ export function parseModelDataset(csvText: string): ModelRecord[] {
       econLegal: valK ?? 0,
     };
 
+    const scoreNewReported = parseNum(row[12]);
+    const scoreOld = parseNum(row[11]);
+    const scoreWorstCase = parseNum(row[13]);
+
     // Calculate components according to formula:
-    // =IF(COUNTBLANK(D:K)=0; AVERAGE(D:E; (F/2+50); 1,4085*(G-29); H:I; 1,2*(J-16,6666); K); "")
     const rawContributions: { comp: typeof BENCHMARK_COMPONENTS[0]; raw: number; transformed: number; pts: number }[] = [];
     let sumTransformed = 0;
 
@@ -194,8 +199,9 @@ export function parseModelDataset(csvText: string): ModelRecord[] {
     });
 
     const scoreNewCalculated = parseFloat(sumTransformed.toFixed(2));
-    const scoreNewReported = parseNum(row[12]);
-    const targetScore = scoreNewReported ?? Math.round(scoreNewCalculated);
+    const targetScore = scoreNewReported ?? scoreOld ?? Math.round(scoreNewCalculated);
+
+    if (targetScore <= 0) return null;
 
     // Normalize points contribution slightly to match the reported score height exactly
     const normFactor = sumTransformed > 0 ? targetScore / sumTransformed : 1;
@@ -213,23 +219,28 @@ export function parseModelDataset(csvText: string): ModelRecord[] {
       };
     });
 
-    // Col L (col 11): OLD
-    // Col N (col 13): Worst Case
-    // Col O (col 14): Storyline
-    // Col P (col 15): Link to Chat or App
-    // Col Q (col 16): Other links
-    const scoreOld = parseNum(row[11]);
-    const scoreWorstCase = parseNum(row[13]);
     const storyline = (row[14] || '').trim();
-    const chatLink = (row[15] || '').trim();
-    const apiLink = (row[16] || '').trim();
+    const chatLinkRaw = (row[15] || '').trim();
+    const apiLinkRaw = (row[16] || '').trim();
+
+    // Helper to extract first valid http URL from a cell string
+    const extractHttpUrl = (str: string): string | undefined => {
+      if (!str) return undefined;
+      const match = str.match(/https?:\/\/[^\s,]+/);
+      return match ? match[0].trim() : undefined;
+    };
+
+    const parsedChatLink = extractHttpUrl(chatLinkRaw);
+    const parsedApiLink = extractHttpUrl(apiLinkRaw);
+    // Modell-Link: Link aus Spalte P; wenn Spalte P kein Link (sondern nur Text wie z.B. "paid"), dann Link aus Spalte Q; sonst undefined
+    const modelUrl = parsedChatLink || parsedApiLink;
 
     const company = getCompanyMeta(cleanedCreator);
     const faviconUrl = getFaviconUrl(company.domain);
 
-    models.push({
-      id: `${displayName}-${r}`,
-      rank: models.length + 1,
+    return {
+      id: `${displayName}-${rIdx}`,
+      rank: 0,
       flag,
       name: rawNameCell,
       displayName,
@@ -249,23 +260,71 @@ export function parseModelDataset(csvText: string): ModelRecord[] {
       scoreNewReported: targetScore,
       scoreWorstCase,
       storyline,
-      chatLink: chatLink.startsWith('http') ? chatLink : undefined,
-      apiLink: apiLink.startsWith('http') ? apiLink : undefined,
+      chatLink: parsedChatLink,
+      apiLink: parsedApiLink,
+      modelUrl,
       companyDomain: company.domain,
       companyColor: company.color,
       faviconUrl,
-    });
+    };
+  };
+
+  const topModels: ModelRecord[] = [];
+  const seenNames = new Set<string>();
+
+  // 1. Parse top table (stop when hitting section break or timeline)
+  let timelineRowIndex = -1;
+  for (let r = headerRowIndex + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const rowStr = (row || []).join(' ');
+    if (rowStr.includes('Full Timeline:') || rowStr.includes('Full Timeline')) {
+      timelineRowIndex = r;
+      break;
+    }
+    if (rowStr.includes('Sources & Notes')) {
+      // Timeline might come soon after
+      continue;
+    }
+
+    const model = parseRowToModel(row, r);
+    if (model) {
+      const cleanKey = model.displayName.toLowerCase();
+      if (!seenNames.has(cleanKey)) {
+        seenNames.add(cleanKey);
+        topModels.push(model);
+      }
+    }
   }
 
-  // Sort descending by score (highest on left, lowest on right -> higher from right to left!)
-  models.sort((a, b) => {
-    return (b.scoreNewReported ?? 0) - (a.scoreNewReported ?? 0);
-  });
+  // Sort top models descending by score
+  topModels.sort((a, b) => (b.scoreNewReported ?? 0) - (a.scoreNewReported ?? 0));
 
-  // Re-assign ranks 1..30
-  models.forEach((m, idx) => {
+  // 2. Parse timeline starting from timelineRowIndex
+  const timelineModels: ModelRecord[] = [];
+  if (timelineRowIndex !== -1) {
+    for (let r = timelineRowIndex + 1; r < rows.length; r++) {
+      const row = rows[r];
+      const model = parseRowToModel(row, r);
+      if (model) {
+        const cleanKey = model.displayName.toLowerCase();
+        if (!seenNames.has(cleanKey)) {
+          seenNames.add(cleanKey);
+          timelineModels.push(model);
+        }
+      }
+    }
+  }
+
+  // Sort timeline models descending by score
+  timelineModels.sort((a, b) => (b.scoreNewReported ?? 0) - (a.scoreNewReported ?? 0));
+
+  // Combine top models first, then timeline models
+  const allModels = [...topModels, ...timelineModels];
+
+  // Assign sequential ranks 1..N
+  allModels.forEach((m, idx) => {
     m.rank = idx + 1;
   });
 
-  return models.slice(0, 30);
+  return allModels;
 }
